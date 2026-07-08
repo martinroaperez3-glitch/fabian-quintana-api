@@ -1,14 +1,53 @@
+# =========================
+# Etapa 1: Composer
+# =========================
+FROM composer:2 AS composer
+
+WORKDIR /app
+
+COPY composer.json composer.lock ./
+
+RUN composer install \
+    --no-dev \
+    --no-interaction \
+    --optimize-autoloader \
+    --ignore-platform-reqs
+
+COPY . .
+
+RUN composer dump-autoload --optimize
+
+
+# =========================
+# Etapa 2: Node
+# =========================
+FROM node:22.12.0 AS assets
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm ci
+
+COPY . .
+
+RUN npm run build
+
+
+# =========================
+# Etapa 3: PHP
+# =========================
 FROM php:8.4-fpm
 
-# Instalar dependencias del sistema
+# Dependencias del sistema
 RUN apt-get update && apt-get install -y \
     git \
     curl \
+    unzip \
+    zip \
     libpng-dev \
     libonig-dev \
     libxml2-dev \
-    zip \
-    unzip \
     libpq-dev \
     && docker-php-ext-install \
         pdo \
@@ -17,39 +56,31 @@ RUN apt-get update && apt-get install -y \
         exif \
         pcntl \
         bcmath \
-        gd
+        gd \
+    && rm -rf /var/lib/apt/lists/*
 
-# Instalar Node.js 22
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y nodejs
-
-# Instalar Composer
+# Composer
 COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www
 
-# Composer
-COPY composer.json composer.lock ./
-RUN composer install \
-    --no-dev \
-    --no-scripts \
-    --no-autoloader \
-    --no-interaction
-
-# NPM
-COPY package*.json ./
-RUN npm ci
-
-# Copiar el proyecto
+# Copiar todo el proyecto
 COPY . .
 
-# Optimizar
-RUN composer dump-autoload --optimize
-RUN npm run build
+# Copiar vendor generado por Composer
+COPY --from=composer /app/vendor ./vendor
+
+# Copiar assets compilados por Vite
+COPY --from=assets /app/public/build ./public/build
 
 # Permisos
 RUN mkdir -p storage bootstrap/cache \
     && chown -R www-data:www-data storage bootstrap/cache
+
+# Optimizar Laravel (opcional)
+RUN php artisan config:cache || true \
+    && php artisan route:cache || true \
+    && php artisan view:cache || true
 
 # Script de inicio
 RUN printf '#!/bin/sh\n\
