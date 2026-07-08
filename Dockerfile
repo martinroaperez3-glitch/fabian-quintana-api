@@ -1,6 +1,6 @@
 FROM php:8.4-fpm
 
-# Instalar dependencias necesarias para Laravel
+# Instalar dependencias del sistema
 RUN apt-get update && apt-get install -y \
     git curl libpng-dev libonig-dev libxml2-dev zip unzip libpq-dev \
     && docker-php-ext-install pdo pdo_mysql mbstring exif pcntl bcmath gd
@@ -10,16 +10,24 @@ COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && apt-get install -y nodejs
 
 WORKDIR /var/www
+
+# 1. Copiar primero solo los archivos de configuración de dependencias
+COPY composer.json composer.lock ./
+COPY package.json package-lock.json ./
+
+# 2. Instalar dependencias SIN copiar el resto del código aún
+RUN composer install --no-dev --no-scripts --no-autoloader
+RUN npm install
+
+# 3. AHORA copiamos todo el código fuente
 COPY . .
 
-# Instalar dependencias y optimizar Laravel para producción
-RUN composer install --no-dev --optimize-autoloader
-RUN npm install && npm run build
+# 4. Finalizar instalación (scripts, autoloader, build de assets)
+RUN composer dump-autoload --optimize
+RUN npm run build
 
-# Configurar permisos de directorios
+# Configurar permisos y script de arranque (lo que ya tenías)
 RUN mkdir -p storage bootstrap/cache && chown -R www-data:www-data storage bootstrap/cache
-
-# Crear script de arranque: Migra la BD, vincula el storage y corre PHP-FPM
 RUN echo '#!/bin/sh\n\
 php artisan migrate --force\n\
 php artisan storage:link\n\
